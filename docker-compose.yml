@@ -1,0 +1,57 @@
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: server-db
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+
+  redis:
+    image: redis:alpine
+    container_name: server-redis
+    restart: always
+    ports:
+      - 6379:6379
+
+  nginx:
+    image: nginx:alpine
+    container_name: server-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/frontend:/usr/share/nginx/html
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - /opt/el_impostor/media:/usr/share/nginx/html/media:ro
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    container_name: server-backend
+    restart: always
+    environment:
+      - STAGE=${STAGE}
+    expose:
+      - 8000
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+      - /opt/el_impostor/media:/app/media
+
+volumes:
+  db_data:

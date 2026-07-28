@@ -1,0 +1,40 @@
+
+# 1. Install Docker and Docker Compose
+
+# 2. Create Folder for image storage
+/opt/el_impostor/media
+
+# 3. Give write permissions to the folder
+sudo chown -R 33:33 /opt/el_impostor/media
+
+# 4. Edit server IP in .env file
+SERVER_IP="YOUR_SERVER_IP"
+
+# 5. Build and run containers
+./deploy.sh up
+
+# 6. Check the condition of the containers
+docker ps
+
+# 7. Restart container, need to sync database
+./deploy.sh down
+
+# 8. Start containers
+./deploy.sh up
+
+# 9. Create database structure
+docker exec -it server-backend python manage.py migrate
+
+# 10. (Optional) Load testing database (Players, Question Groups, Questions, Alternatives & Images)
+docker exec -it server-backend python manage.py create_testing_db
+
+# 11. Access in browser
+http://[IP_ADDRESS]
+
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   
+
+# Reboot Webserver
+./deploy.sh nginx
+
+# Reboot Backend
+./deploy.sh backend

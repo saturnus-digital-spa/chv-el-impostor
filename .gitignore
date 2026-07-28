@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.github/
+.env
+deploy/*
+media/*
+**/.DS_Store
+logs/*_log
