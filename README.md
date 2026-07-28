@@ -72,34 +72,64 @@ Canal global WebSocket en el endpoint `ws://<host>/ws/game/` (grupo `"game"`):
 
 ---
 
-## ⚙️ Despliegue y Modo Producción
+## ⚙️ Instrucciones de Instalación y Despliegue en Producción
 
-### 1. Iniciar los Servicios (Docker)
-Para levantar el backend completo (Django Daphne + Redis + Postgres + Nginx):
+Siga estos pasos para instalar y desplegar el sistema en un servidor de producción:
+
+### 1. Requisitos Previos
+Instalar Docker y Docker Compose en el servidor.
+
+### 2. Crear Carpeta para Almacenamiento de Imágenes (Media)
+```bash
+mkdir -p /opt/el_impostor/media
+sudo chown -R 33:33 /opt/el_impostor/media
+```
+
+### 3. Configurar la Dirección IP del Servidor
+Editar la variable `SERVER_IP` en el archivo `.env`:
+```env
+SERVER_IP="SU_IP_DE_SERVIDOR"
+```
+
+### 4. Compilar y Levantar Contenedores
 ```bash
 cd backend
 ./deploy.sh up
 ```
 
-### 2. Estructura de Base de Datos y Migraciones
-Para aplicar las migraciones en la base de datos de producción:
+### 5. Verificar Estado de los Contenedores
+```bash
+docker ps
+```
+
+### 6. Reiniciar Servicios (Si Requiere Sincronización)
+```bash
+./deploy.sh down
+./deploy.sh up
+```
+
+### 7. Crear Estructura de Base de Datos (Migraciones)
 ```bash
 docker exec -it server-backend python manage.py migrate
 ```
 
-### 3. Carga Opcional de Datos de Prueba
-Para poblar la base de datos con jugadores y preguntas de prueba:
+### 8. (Opcional) Cargar Base de Datos de Prueba
+Para poblar la base de datos con 3 jugadores, 3 grupos de preguntas (30 preguntas c/u) y alternativas con imágenes:
 ```bash
 docker exec -it server-backend python manage.py create_testing_db
 ```
 
-### 4. Reinicio de Contenedores Específicos
-```bash
-# Reiniciar backend (Django/Daphne)
-./deploy.sh backend
+### 9. Acceso en el Navegador
+Acceder en el navegador web a la dirección del servidor:
+`http://[IP_ADDRESS]`
 
+### 10. Comandos Útiles de Reinicio
+```bash
 # Reiniciar servidor web (Nginx)
 ./deploy.sh nginx
+
+# Reiniciar backend (Django/Daphne)
+./deploy.sh backend
 
 # Detener todos los servicios
 ./deploy.sh down
