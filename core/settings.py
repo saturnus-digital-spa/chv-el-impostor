@@ -61,13 +61,11 @@ if STAGE == "PROD":
 
     ARRAY_ALLOWED_HOSTS = [
         IP_SERVER,
-        "10.81.128.31",
         "localhost",
     ]
 
     ARRAY_ALLOWED_HOSTS_HTTPS = [
         f"http://{IP_SERVER}",
-        "http://10.81.128.31"
         "http://localhost",
     ]
 
@@ -81,13 +79,11 @@ else:
 
     ARRAY_ALLOWED_HOSTS = [
         IP_SERVER,
-        "10.81.128.31"
         "localhost",
     ]
 
     ARRAY_ALLOWED_HOSTS_HTTPS = [
         f"http://{IP_SERVER}",
-        "http://10.81.128.31"
         "http://localhost",
     ]
 
