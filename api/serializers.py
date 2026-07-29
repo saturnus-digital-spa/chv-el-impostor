@@ -65,7 +65,7 @@ class PlayerQuestionAnswerSummarySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PlayerQuestionAnswer
-        fields = ['id', 'question', 'question_order', 'status']
+        fields = ['id', 'question', 'question_order', 'status', 'selected_alternative']
 
 
 class PlayerSessionSerializer(serializers.ModelSerializer):

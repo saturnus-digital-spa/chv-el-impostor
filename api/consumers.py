@@ -115,6 +115,15 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             player_session = PlayerSession.objects.get(pk=player_session_id)
             active_game.current_player_session = player_session
             active_game.save(update_fields=['current_player_session'])
+
+            # Si la pregunta actual del jugador ya fue respondida (ej: se equivocó anteriormente),
+            # le asignamos la siguiente pregunta disponible para continuar.
+            current_pqa = player_session.answers.filter(question__order=player_session.current_question_index).first()
+            if current_pqa and current_pqa.status in ['correct', 'incorrect']:
+                next_answer = player_session.get_next_question_answer(start_from_order=player_session.current_question_index)
+                if next_answer:
+                    player_session.current_question_index = next_answer.question.order
+                    player_session.save(update_fields=['current_question_index'])
         except PlayerSession.DoesNotExist:
             pass
 
@@ -194,10 +203,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 ps.timer_status = "paused"
                 ps.last_timer_start = None
 
-        # Avanzar a la siguiente pregunta lógica
-        next_answer = ps.get_next_question_answer(start_from_order=alt.question.order)
-        if next_answer:
-            ps.current_question_index = next_answer.question.order
+        # Avanzar a la siguiente pregunta lógica solo si NO se requiere pausar por error en sesión multijugador
+        if not is_incorrect_pause:
+            next_answer = ps.get_next_question_answer(start_from_order=alt.question.order)
+            if next_answer:
+                ps.current_question_index = next_answer.question.order
 
         ps.save()
 
