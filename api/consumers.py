@@ -76,6 +76,18 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             await self.handle_reset_game_session(game_session_id)
             await self.broadcast_state()
 
+        elif action_type == "toggle_alternatives_status":
+            await self.handle_toggle_alternatives_status()
+            await self.broadcast_state()
+
+        elif action_type == "toggle_game_session_active":
+            await self.handle_toggle_game_session_active()
+            await self.broadcast_state()
+
+        elif action_type == "toggle_gc_question_status":
+            await self.handle_toggle_gc_question_status()
+            await self.broadcast_state()
+
     async def send_game(self, event):
         payload = event.get("payload", {})
         await self.send_json({
@@ -114,12 +126,13 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         try:
             player_session = PlayerSession.objects.get(pk=player_session_id)
             active_game.current_player_session = player_session
-            active_game.save(update_fields=['current_player_session'])
+            active_game.alternatives_status = False
+            active_game.save(update_fields=['current_player_session', 'alternatives_status'])
 
-            # Si la pregunta actual del jugador ya fue respondida (ej: se equivocó anteriormente),
+            # Si la pregunta actual del jugador ya fue respondida o pospuesta (ej: se equivocó o pospuso anteriormente),
             # le asignamos la siguiente pregunta disponible para continuar.
             current_pqa = player_session.answers.filter(question__order=player_session.current_question_index).first()
-            if current_pqa and current_pqa.status in ['correct', 'incorrect']:
+            if current_pqa and current_pqa.status in ['correct', 'incorrect', 'postponed']:
                 next_answer = player_session.get_next_question_answer(start_from_order=player_session.current_question_index)
                 if next_answer:
                     player_session.current_question_index = next_answer.question.order
@@ -145,6 +158,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 ps.timer_status = "running"
                 ps.last_timer_start = now
                 ps.save(update_fields=["timer_status", "last_timer_start"])
+
+            # Al iniciar el cronómetro, revelar automáticamente las alternativas
+            game = ps.game_session
+            if not game.alternatives_status:
+                game.alternatives_status = True
+                game.save(update_fields=["alternatives_status"])
 
         elif command == "pause":
             if ps.timer_status == "running" and ps.last_timer_start:
@@ -226,11 +245,25 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             pqa.status = "postponed"
             pqa.save(update_fields=["status"])
 
-        # Avanzar a la siguiente pregunta lógica
-        next_answer = ps.get_next_question_answer(start_from_order=ps.current_question_index)
-        if next_answer:
-            ps.current_question_index = next_answer.question.order
-            ps.save(update_fields=["current_question_index"])
+        # Pausar cronómetro y mantener pregunta si hay más de 1 jugador en la sesión
+        total_players = ps.game_session.player_sessions.count()
+        is_postpone_pause = (total_players > 1)
+
+        if is_postpone_pause:
+            if ps.timer_status == "running" and ps.last_timer_start:
+                now = timezone.now()
+                delta_sec = int((now - ps.last_timer_start).total_seconds())
+                ps.accumulated_seconds += delta_sec
+                ps.timer_status = "paused"
+                ps.last_timer_start = None
+                ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
+
+        # Avanzar a la siguiente pregunta lógica solo si NO se requiere pausar por posponer en sesión multijugador
+        if not is_postpone_pause:
+            next_answer = ps.get_next_question_answer(start_from_order=ps.current_question_index)
+            if next_answer:
+                ps.current_question_index = next_answer.question.order
+                ps.save(update_fields=["current_question_index"])
 
     @database_sync_to_async
     def handle_set_current_question(self, player_session_id, question_order):
@@ -249,6 +282,9 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if not game:
             return
 
+        game.alternatives_status = False
+        game.save(update_fields=['alternatives_status'])
+
         for ps in game.player_sessions.all():
             ps.accumulated_seconds = 0
             ps.timer_status = "stopped"
@@ -256,3 +292,30 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             ps.current_question_index = 1
             ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start", "current_question_index"])
             ps.answers.update(status="pending", selected_alternative=None, answered_at=None)
+
+    @database_sync_to_async
+    def handle_toggle_alternatives_status(self):
+        active_game = GameSession.objects.filter(is_active=True).order_by('-id').first()
+        if not active_game:
+            active_game = GameSession.objects.order_by('-id').first()
+        if active_game:
+            active_game.alternatives_status = not active_game.alternatives_status
+            active_game.save(update_fields=['alternatives_status'])
+
+    @database_sync_to_async
+    def handle_toggle_game_session_active(self):
+        active_game = GameSession.objects.filter(is_active=True).order_by('-id').first()
+        if not active_game:
+            active_game = GameSession.objects.order_by('-id').first()
+        if active_game:
+            active_game.is_active = not active_game.is_active
+            active_game.save(update_fields=['is_active'])
+
+    @database_sync_to_async
+    def handle_toggle_gc_question_status(self):
+        active_game = GameSession.objects.filter(is_active=True).order_by('-id').first()
+        if not active_game:
+            active_game = GameSession.objects.order_by('-id').first()
+        if active_game:
+            active_game.gc_question_status = not active_game.gc_question_status
+            active_game.save(update_fields=['gc_question_status'])

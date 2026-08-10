@@ -90,6 +90,8 @@ class Player(models.Model):
 class GameSession(models.Model):
     name = models.CharField(max_length=150)
     is_active = models.BooleanField(default=False, db_index=True)
+    alternatives_status = models.BooleanField(default=True)
+    gc_question_status = models.BooleanField(default=True)
     current_player_session = models.ForeignKey(
         'PlayerSession',
         null=True,

@@ -111,6 +111,8 @@ class GameSessionSerializer(serializers.ModelSerializer):
             'id', 
             'name', 
             'is_active', 
+            'alternatives_status',
+            'gc_question_status',
             'current_player_session', 
             'player_sessions', 
             'created_at'
@@ -149,6 +151,8 @@ def serialize_full_game_state(game_session_id):
         'id': game_session.id,
         'name': game_session.name,
         'is_active': game_session.is_active,
+        'alternatives_status': game_session.alternatives_status,
+        'gc_question_status': game_session.gc_question_status,
         'current_player_session_id': game_session.current_player_session_id,
         'current_player_session': current_player_session_data,
         'current_question': current_question_data,
