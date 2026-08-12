@@ -3,6 +3,5 @@ __pycache__/
 .github/
 .env
 deploy/*
-media/*
 **/.DS_Store
 logs/*_log
