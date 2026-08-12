@@ -129,7 +129,7 @@ class PlayerSession(models.Model):
     )
     player = models.ForeignKey(Player, on_delete=models.CASCADE)
     question_group = models.ForeignKey(QuestionGroup, on_delete=models.PROTECT)
-
+    alternative_text_visibility = models.BooleanField(default=False)
     time_limit_seconds = models.IntegerField(choices=TIME_CHOICES, default=180)
     accumulated_seconds = models.IntegerField(default=0)
     timer_status = models.CharField(

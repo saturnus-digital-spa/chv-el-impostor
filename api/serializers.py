@@ -87,6 +87,7 @@ class PlayerSessionSerializer(serializers.ModelSerializer):
             'player_name',
             'question_group',
             'question_group_name',
+            'alternative_text_visibility',
             'time_limit_seconds',
             'accumulated_seconds',
             'current_elapsed_time',

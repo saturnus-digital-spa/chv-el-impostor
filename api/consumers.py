@@ -113,6 +113,18 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             active_game = GameSession.objects.order_by('-id').first()
         if not active_game:
             return None
+
+        # Cuando el tiempo de juego se cumpla, detener automáticamente el cronómetro
+        now = timezone.now()
+        for ps in active_game.player_sessions.filter(timer_status="running"):
+            if ps.last_timer_start:
+                delta_sec = int((now - ps.last_timer_start).total_seconds())
+                if (ps.accumulated_seconds + delta_sec) >= ps.time_limit_seconds:
+                    ps.accumulated_seconds = ps.time_limit_seconds
+                    ps.timer_status = "stopped"
+                    ps.last_timer_start = None
+                    ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
+
         return serialize_full_game_state(active_game.id)
 
     @database_sync_to_async
@@ -245,25 +257,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             pqa.status = "postponed"
             pqa.save(update_fields=["status"])
 
-        # Pausar cronómetro y mantener pregunta si hay más de 1 jugador en la sesión
-        total_players = ps.game_session.player_sessions.count()
-        is_postpone_pause = (total_players > 1)
-
-        if is_postpone_pause:
-            if ps.timer_status == "running" and ps.last_timer_start:
-                now = timezone.now()
-                delta_sec = int((now - ps.last_timer_start).total_seconds())
-                ps.accumulated_seconds += delta_sec
-                ps.timer_status = "paused"
-                ps.last_timer_start = None
-                ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
-
-        # Avanzar a la siguiente pregunta lógica solo si NO se requiere pausar por posponer en sesión multijugador
-        if not is_postpone_pause:
-            next_answer = ps.get_next_question_answer(start_from_order=ps.current_question_index)
-            if next_answer:
-                ps.current_question_index = next_answer.question.order
-                ps.save(update_fields=["current_question_index"])
+        # Avanzar siempre a la siguiente pregunta lógica sin pausar el reloj
+        next_answer = ps.get_next_question_answer(start_from_order=ps.current_question_index)
+        if next_answer:
+            ps.current_question_index = next_answer.question.order
+            ps.save(update_fields=["current_question_index"])
 
     @database_sync_to_async
     def handle_set_current_question(self, player_session_id, question_order):
