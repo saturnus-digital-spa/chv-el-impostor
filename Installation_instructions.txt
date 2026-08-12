@@ -38,3 +38,20 @@ http://[IP_ADDRESS]
 
 # Reboot Backend
 ./deploy.sh backend
+
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   
+# Carga inicial de preguntas
+
+# Hacer las migraciones en db
+docker exec -it server-db sh
+
+# Conección a docker
+psql -U postgres -d project
+
+# Eliminar y crear squema
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO public;
+
+# Dump Database
+docker exec -i server-db psql -U postgres -d project < ./db.sql
