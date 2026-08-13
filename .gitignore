@@ -2,6 +2,7 @@ __pycache__/
 .venv/
 .github/
 .env
+media/*
 deploy/*
 **/.DS_Store
 logs/*_log
