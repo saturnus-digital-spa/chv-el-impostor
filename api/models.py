@@ -199,11 +199,7 @@ class PlayerSession(models.Model):
         return self.answers.filter(status='pending').count()
 
     def calculate_current_elapsed_time(self):
-        if self.timer_status == 'running' and self.last_timer_start:
-            now = timezone.now()
-            delta_seconds = int((now - self.last_timer_start).total_seconds())
-            return self.accumulated_seconds + delta_seconds
-        return self.accumulated_seconds
+        return min(self.accumulated_seconds, self.time_limit_seconds)
 
     def get_next_question_answer(self, start_from_order=None):
         answers = self.answers.select_related('question').order_by('question__order')

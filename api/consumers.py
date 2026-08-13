@@ -1,4 +1,5 @@
 import json
+import asyncio
 from django.utils import timezone
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -12,6 +13,99 @@ from api.models import (
 from api.serializers import serialize_full_game_state
 
 
+# Gestor global de tareas de cronómetro maestro en segundo plano
+active_timer_tasks = {}
+
+
+def stop_player_timer_task_fun(player_session_id=None):
+    """
+    Cancela y remueve la tarea en segundo plano del cronómetro activo.
+    """
+    if player_session_id is not None:
+        task = active_timer_tasks.pop(player_session_id, None)
+        if task and not task.done():
+            task.cancel()
+    else:
+        for ps_id, task in list(active_timer_tasks.items()):
+            if task and not task.done():
+                task.cancel()
+        active_timer_tasks.clear()
+
+
+@database_sync_to_async
+def tick_player_session_second_fun(player_session_id):
+    """
+    Incrementa 1 segundo acumulado en la base de datos para la sesión del jugador activo.
+    Retorna un payload ligero únicamente con la información del temporizador.
+    """
+    ps = PlayerSession.objects.filter(pk=player_session_id).first()
+    if not ps or ps.timer_status != "running":
+        return True, None
+
+    ps.accumulated_seconds += 1
+    is_finished = False
+
+    if ps.accumulated_seconds >= ps.time_limit_seconds:
+        ps.accumulated_seconds = ps.time_limit_seconds
+        ps.timer_status = "stopped"
+        ps.last_timer_start = None
+        is_finished = True
+
+    ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
+
+    timer_payload = {
+        "player_session_id": ps.id,
+        "accumulated_seconds": ps.accumulated_seconds,
+        "timer_status": ps.timer_status,
+        "is_finished": is_finished
+    }
+    return is_finished, timer_payload
+
+
+@database_sync_to_async
+def get_full_game_state_by_ps_fun(player_session_id):
+    ps = PlayerSession.objects.filter(pk=player_session_id).first()
+    if not ps:
+        return None
+    return serialize_full_game_state(ps.game_session_id)
+
+
+async def run_player_timer_loop_fun(channel_layer, player_session_id):
+    """
+    Corrutina máster que late cada 1 segundo en el servidor emitiendo únicamente la actualización liviana del reloj.
+    """
+    try:
+        while True:
+            await asyncio.sleep(1)
+            is_finished, timer_payload = await tick_player_session_second_fun(player_session_id)
+
+            if timer_payload:
+                await channel_layer.group_send(
+                    "game",
+                    {
+                        "type": "send_timer_tick",
+                        "payload": timer_payload
+                    }
+                )
+
+            if is_finished:
+                # Al finalizar el tiempo (00:00), enviar actualización de estado completo
+                full_state = await get_full_game_state_by_ps_fun(player_session_id)
+                if full_state:
+                    await channel_layer.group_send(
+                        "game",
+                        {
+                            "type": "send_game",
+                            "payload": full_state
+                        }
+                    )
+                break
+    except asyncio.CancelledError:
+        pass
+    finally:
+        active_timer_tasks.pop(player_session_id, None)
+
+
 class GameConsumer(AsyncJsonWebsocketConsumer):
     GROUP_NAME = "game"
 
@@ -22,13 +116,19 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         )
         await self.accept()
 
-        # Enviar estado actual al conectar
+        # Enviar estado actual al conectar y asegurar tarea activa de cronómetro
         game_state = await self.get_active_game_state()
         if game_state:
             await self.send_json({
                 "type": "game_state",
                 "payload": game_state
             })
+            active_ps = game_state.get("current_player_session")
+            if active_ps and active_ps.get("timer_status") == "running":
+                ps_id = active_ps.get("id")
+                if ps_id and ps_id not in active_timer_tasks:
+                    task = asyncio.create_task(run_player_timer_loop_fun(self.channel_layer, ps_id))
+                    active_timer_tasks[ps_id] = task
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(
@@ -45,19 +145,30 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         elif action_type == "set_active_player_session":
             player_session_id = payload.get("player_session_id")
+            stop_player_timer_task_fun()
             await self.handle_set_active_player_session(player_session_id)
             await self.broadcast_state()
 
         elif action_type == "control_timer":
             timer_command = payload.get("command")  # 'play', 'pause', 'reset'
             player_session_id = payload.get("player_session_id")
-            await self.handle_control_timer(timer_command, player_session_id)
+            active_ps_id = await self.handle_control_timer(timer_command, player_session_id)
+
+            if timer_command == "play" and active_ps_id:
+                stop_player_timer_task_fun(active_ps_id)
+                task = asyncio.create_task(run_player_timer_loop_fun(self.channel_layer, active_ps_id))
+                active_timer_tasks[active_ps_id] = task
+            elif timer_command in ["pause", "reset"]:
+                stop_player_timer_task_fun(active_ps_id)
+
             await self.broadcast_state()
 
         elif action_type == "submit_answer":
             player_session_id = payload.get("player_session_id")
             alternative_id = payload.get("alternative_id")
-            await self.handle_submit_answer(player_session_id, alternative_id)
+            was_paused = await self.handle_submit_answer(player_session_id, alternative_id)
+            if was_paused and player_session_id:
+                stop_player_timer_task_fun(player_session_id)
             await self.broadcast_state()
 
         elif action_type == "postpone_question":
@@ -73,6 +184,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         elif action_type == "reset_game_session":
             game_session_id = payload.get("game_session_id")
+            stop_player_timer_task_fun()
             await self.handle_reset_game_session(game_session_id)
             await self.broadcast_state()
 
@@ -92,6 +204,13 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         payload = event.get("payload", {})
         await self.send_json({
             "type": "game_state",
+            "payload": payload
+        })
+
+    async def send_timer_tick(self, event):
+        payload = event.get("payload", {})
+        await self.send_json({
+            "type": "timer_tick",
             "payload": payload
         })
 
@@ -117,13 +236,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         # Cuando el tiempo de juego se cumpla, detener automáticamente el cronómetro
         now = timezone.now()
         for ps in active_game.player_sessions.filter(timer_status="running"):
-            if ps.last_timer_start:
-                delta_sec = int((now - ps.last_timer_start).total_seconds())
-                if (ps.accumulated_seconds + delta_sec) >= ps.time_limit_seconds:
-                    ps.accumulated_seconds = ps.time_limit_seconds
-                    ps.timer_status = "stopped"
-                    ps.last_timer_start = None
-                    ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
+            if ps.accumulated_seconds >= ps.time_limit_seconds:
+                ps.accumulated_seconds = ps.time_limit_seconds
+                ps.timer_status = "stopped"
+                ps.last_timer_start = None
+                ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
 
         return serialize_full_game_state(active_game.id)
 
@@ -161,12 +278,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             ps = game.current_player_session if game else None
 
         if not ps:
-            return
+            return None
 
         now = timezone.now()
 
         if command == "play":
-            if ps.timer_status != "running":
+            if ps.timer_status != "running" and ps.accumulated_seconds < ps.time_limit_seconds:
                 ps.timer_status = "running"
                 ps.last_timer_start = now
                 ps.save(update_fields=["timer_status", "last_timer_start"])
@@ -178,12 +295,10 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 game.save(update_fields=["alternatives_status"])
 
         elif command == "pause":
-            if ps.timer_status == "running" and ps.last_timer_start:
-                delta_sec = int((now - ps.last_timer_start).total_seconds())
-                ps.accumulated_seconds += delta_sec
+            if ps.timer_status == "running":
                 ps.timer_status = "paused"
                 ps.last_timer_start = None
-                ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start"])
+                ps.save(update_fields=["timer_status", "last_timer_start"])
 
         elif command == "reset":
             ps.accumulated_seconds = 0
@@ -193,16 +308,18 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start", "current_question_index"])
             ps.answers.update(status="pending", selected_alternative=None, answered_at=None)
 
+        return ps.id
+
     @database_sync_to_async
     def handle_submit_answer(self, player_session_id, alternative_id):
         ps = PlayerSession.objects.filter(pk=player_session_id).first()
         if not ps:
-            return
+            return False
 
         try:
             alt = Alternative.objects.get(pk=alternative_id)
         except Alternative.DoesNotExist:
-            return
+            return False
 
         pqa = PlayerQuestionAnswer.objects.filter(
             player_session=ps,
@@ -210,7 +327,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         ).first()
 
         if not pqa:
-            return
+            return False
 
         is_correct = alt.is_correct
         pqa.selected_alternative = alt
@@ -218,29 +335,24 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         pqa.answered_at = timezone.now()
         pqa.save()
 
-        # Pausar cronómetro si:
-        # 1. Es una respuesta incorrecta y hay más de 1 jugador en la sesión
-        # 2. El jugador completó la totalidad de sus preguntas (Ronda terminada)
         total_players = ps.game_session.player_sessions.count()
         is_incorrect_pause = (not is_correct and total_players > 1)
         has_remaining_questions = ps.answers.filter(status__in=['pending', 'postponed']).exists()
         is_round_finished = not has_remaining_questions
 
+        was_paused = False
         if is_incorrect_pause or is_round_finished:
-            if ps.timer_status == "running" and ps.last_timer_start:
-                now = timezone.now()
-                delta_sec = int((now - ps.last_timer_start).total_seconds())
-                ps.accumulated_seconds += delta_sec
-                ps.timer_status = "paused"
-                ps.last_timer_start = None
+            ps.timer_status = "paused"
+            ps.last_timer_start = None
+            was_paused = True
 
-        # Avanzar a la siguiente pregunta lógica solo si NO se requiere pausar por error en sesión multijugador
         if not is_incorrect_pause:
             next_answer = ps.get_next_question_answer(start_from_order=alt.question.order)
             if next_answer:
                 ps.current_question_index = next_answer.question.order
 
         ps.save()
+        return was_paused
 
     @database_sync_to_async
     def handle_postpone_question(self, player_session_id):

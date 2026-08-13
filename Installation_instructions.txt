@@ -54,4 +54,4 @@ CREATE SCHEMA public;
 GRANT ALL ON SCHEMA public TO public;
 
 # Dump Database
-docker exec -i server-db psql -U postgres -d project < ./db.sql
+docker exec -i server-db psql -U postgres -d project < db.sql
