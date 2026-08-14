@@ -169,13 +169,17 @@ class PlayerSession(models.Model):
             if group_changed:
                 self.answers.all().delete()
 
-            for question in self.question_group.questions.all().order_by('order'):
-                PlayerQuestionAnswer.objects.get_or_create(
-                    player_session=self,
-                    question=question
-                )
+            existing_q_ids = set(self.answers.values_list('question_id', flat=True))
+            questions = self.question_group.questions.all().order_by('order')
+            questions_to_create = [
+                PlayerQuestionAnswer(player_session=self, question=q)
+                for q in questions
+                if q.id not in existing_q_ids
+            ]
+            if questions_to_create:
+                PlayerQuestionAnswer.objects.bulk_create(questions_to_create)
 
-            first_q = self.question_group.questions.order_by('order').first()
+            first_q = questions.first()
             if first_q:
                 self.current_question_index = first_q.order
             else:

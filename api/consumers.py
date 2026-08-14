@@ -234,7 +234,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             return None
 
         # Cuando el tiempo de juego se cumpla, detener automáticamente el cronómetro
-        now = timezone.now()
         for ps in active_game.player_sessions.filter(timer_status="running"):
             if ps.accumulated_seconds >= ps.time_limit_seconds:
                 ps.accumulated_seconds = ps.time_limit_seconds
@@ -283,10 +282,17 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         now = timezone.now()
 
         if command == "play":
+            # Si la pregunta actual ya fue respondida (ej: respuesta incorrecta o correcta), avanzar a la siguiente disponible al reanudar
+            current_pqa = ps.answers.filter(question__order=ps.current_question_index).first()
+            if current_pqa and current_pqa.status in ['correct', 'incorrect']:
+                next_answer = ps.get_next_question_answer(start_from_order=ps.current_question_index)
+                if next_answer:
+                    ps.current_question_index = next_answer.question.order
+
             if ps.timer_status != "running" and ps.accumulated_seconds < ps.time_limit_seconds:
                 ps.timer_status = "running"
                 ps.last_timer_start = now
-                ps.save(update_fields=["timer_status", "last_timer_start"])
+                ps.save(update_fields=["timer_status", "last_timer_start", "current_question_index"])
 
             # Al iniciar el cronómetro, revelar automáticamente las alternativas
             game = ps.game_session

@@ -122,14 +122,22 @@ class GameSessionSerializer(serializers.ModelSerializer):
 
 def serialize_full_game_state(game_session_id):
     """
-    Construye el payload completo de estado para difundir vía WebSocket.
+    Construye el payload completo de estado para difundir vía WebSocket con consultas optimizadas.
     """
     try:
         game_session = GameSession.objects.get(pk=game_session_id)
     except GameSession.DoesNotExist:
         return None
 
-    player_sessions_qs = game_session.player_sessions.all()
+    player_sessions_qs = game_session.player_sessions.select_related(
+        'player',
+        'question_group'
+    ).prefetch_related(
+        'answers',
+        'answers__question',
+        'answers__selected_alternative'
+    ).all()
+
     player_sessions_data = PlayerSessionSerializer(player_sessions_qs, many=True).data
 
     current_player_session_data = None
@@ -139,8 +147,13 @@ def serialize_full_game_state(game_session_id):
         active_ps = game_session.current_player_session
         current_player_session_data = PlayerSessionSerializer(active_ps).data
 
-        # Obtener pregunta actual según current_question_index
-        active_answer = active_ps.answers.filter(question__order=active_ps.current_question_index).first()
+        # Obtener pregunta actual según current_question_index optimizando N+1
+        active_answer = active_ps.answers.select_related(
+            'question'
+        ).prefetch_related(
+            'question__alternatives'
+        ).filter(question__order=active_ps.current_question_index).first()
+
         if not active_answer:
             # Buscar la siguiente pregunta no respondida si index no apunta a una válida
             active_answer = active_ps.get_next_question_answer()
