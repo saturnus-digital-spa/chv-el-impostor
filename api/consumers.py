@@ -1,4 +1,5 @@
 import json
+import time
 import asyncio
 from django.utils import timezone
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -72,34 +73,50 @@ def get_full_game_state_by_ps_fun(player_session_id):
 
 async def run_player_timer_loop_fun(channel_layer, player_session_id):
     """
-    Corrutina máster que late cada 1 segundo en el servidor emitiendo únicamente la actualización liviana del reloj.
+    Corrutina máster de alta precisión (Reloj Atómico Zero-Drift).
+    Utiliza tiempo monotónico absoluto del sistema para auto-corregir micro-latencias
+    y garantizar 0.000s de desfasaje acumulado a lo largo del tiempo.
     """
+    start_time = time.monotonic()
+    tick_count = 0
+
     try:
         while True:
-            await asyncio.sleep(1)
-            is_finished, timer_payload = await tick_player_session_second_fun(player_session_id)
+            tick_count += 1
+            target_time = start_time + tick_count
+            now = time.monotonic()
+            sleep_duration = max(0.0, target_time - now)
 
-            if timer_payload:
-                await channel_layer.group_send(
-                    "game",
-                    {
-                        "type": "send_timer_tick",
-                        "payload": timer_payload
-                    }
-                )
+            await asyncio.sleep(sleep_duration)
 
-            if is_finished:
-                # Al finalizar el tiempo (00:00), enviar actualización de estado completo
-                full_state = await get_full_game_state_by_ps_fun(player_session_id)
-                if full_state:
+            try:
+                is_finished, timer_payload = await tick_player_session_second_fun(player_session_id)
+
+                if timer_payload:
                     await channel_layer.group_send(
                         "game",
                         {
-                            "type": "send_game",
-                            "payload": full_state
+                            "type": "send_timer_tick",
+                            "payload": timer_payload
                         }
                     )
-                break
+
+                if is_finished:
+                    # Al finalizar el tiempo (00:00), enviar actualización de estado completo
+                    full_state = await get_full_game_state_by_ps_fun(player_session_id)
+                    if full_state:
+                        await channel_layer.group_send(
+                            "game",
+                            {
+                                "type": "send_game",
+                                "payload": full_state
+                            }
+                        )
+                    break
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                print(f"Aviso de seguridad en tick de reloj: {err}")
     except asyncio.CancelledError:
         pass
     finally:
