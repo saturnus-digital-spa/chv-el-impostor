@@ -346,6 +346,10 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if not ps:
             return False
 
+        # Si el tiempo del jugador se agotó (00:00), ignorar respuestas adicionales
+        if ps.accumulated_seconds >= ps.time_limit_seconds:
+            return False
+
         try:
             alt = Alternative.objects.get(pk=alternative_id)
         except Alternative.DoesNotExist:
@@ -387,7 +391,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def handle_postpone_question(self, player_session_id):
         ps = PlayerSession.objects.filter(pk=player_session_id).first()
-        if not ps:
+        if not ps or ps.accumulated_seconds >= ps.time_limit_seconds:
             return
 
         pqa = PlayerQuestionAnswer.objects.filter(
