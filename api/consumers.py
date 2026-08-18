@@ -205,6 +205,13 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             await self.handle_reset_game_session(game_session_id)
             await self.broadcast_state()
 
+        elif action_type == "reset_player_session":
+            player_session_id = payload.get("player_session_id")
+            if player_session_id:
+                stop_player_timer_task_fun(player_session_id)
+                await self.handle_reset_player_session(player_session_id)
+                await self.broadcast_state()
+
         elif action_type == "toggle_alternatives_status":
             await self.handle_toggle_alternatives_status()
             await self.broadcast_state()
@@ -425,6 +432,18 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             ps.current_question_index = 1
             ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start", "current_question_index"])
             ps.answers.update(status="pending", selected_alternative=None, answered_at=None)
+
+    @database_sync_to_async
+    def handle_reset_player_session(self, player_session_id):
+        ps = PlayerSession.objects.filter(pk=player_session_id).first()
+        if not ps:
+            return
+        ps.accumulated_seconds = 0
+        ps.timer_status = "stopped"
+        ps.last_timer_start = None
+        ps.current_question_index = 1
+        ps.save(update_fields=["accumulated_seconds", "timer_status", "last_timer_start", "current_question_index"])
+        ps.answers.update(status="pending", selected_alternative=None, answered_at=None)
 
     @database_sync_to_async
     def handle_toggle_alternatives_status(self):
