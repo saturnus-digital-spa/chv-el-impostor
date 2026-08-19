@@ -275,6 +275,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if not active_game:
             return
 
+        # Pausar cualquier sesión de jugador corriendo al cambiar de turno
+        for ps_running in active_game.player_sessions.filter(timer_status="running"):
+            ps_running.timer_status = "paused"
+            ps_running.last_timer_start = None
+            ps_running.save(update_fields=["timer_status", "last_timer_start"])
+
         try:
             player_session = PlayerSession.objects.get(pk=player_session_id)
             active_game.current_player_session = player_session
